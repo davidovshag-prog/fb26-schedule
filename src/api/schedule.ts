@@ -24,7 +24,6 @@ const SATURDAY_ELECTIVES = [
     'ЕП-ist4-3',
 ];
 
-
 export const fetchAvailableWeeks = async (): Promise<SheetWeek[]> => {
     const response = await fetch(`${WORKER_URL}/?action=weeks`, {
         cache: 'no-store',
@@ -51,7 +50,6 @@ export const fetchAvailableWeeks = async (): Promise<SheetWeek[]> => {
         )
         .sort((a, b) => a.weekNumber - b.weekNumber);
 };
-
 
 const cleanText = (value: string): string =>
     (value || '')
@@ -143,7 +141,7 @@ const buildGrid = (
 
         let column = 0;
 
-        Array.from(row.cells).forEach(cell => {
+        Array.from(row.cells).forEach((cell) => {
             while (grid[rowIndex][column]) {
                 column++;
             }
@@ -191,12 +189,12 @@ const parseHtmlSchedule = (doc: Document): Lesson[] => {
 
     const grid = buildGrid(rows);
 
-    const headerRow = grid.find(row =>
-        row?.some(cell => cell?.text === TARGET_GROUP)
+    const headerRow = grid.find((row) =>
+        row?.some((cell) => cell?.text === TARGET_GROUP)
     );
 
     const groupColumn = headerRow?.findIndex(
-        cell => cell?.text === TARGET_GROUP
+        (cell) => cell?.text === TARGET_GROUP
     ) ?? -1;
 
     if (groupColumn === -1) {
@@ -260,7 +258,7 @@ const parseHtmlSchedule = (doc: Document): Lesson[] => {
         const cells = grid[rowIndex] || [];
 
         const day = cells
-            .map(cell => cell?.text || '')
+            .map((cell) => cell?.text || '')
             .map(normalizeDay)
             .find(Boolean);
 
@@ -271,7 +269,7 @@ const parseHtmlSchedule = (doc: Document): Lesson[] => {
         if (!currentDay) return;
 
         const time = cells
-            .map(cell => cell?.text || '')
+            .map((cell) => cell?.text || '')
             .map(normalizeTime)
             .find(Boolean);
 
@@ -292,9 +290,14 @@ const parseHtmlSchedule = (doc: Document): Lesson[] => {
 
             const normalizedSubject = normalize(cell.text);
 
+            // Все четыре подгруппы ИКТ-1.
+            const isIkt1Elective =
+                /ЕП\s*-\s*ikt1\s*-\s*[1-4](?!\d)/i.test(cell.text);
+
+            // Субботние выборочные занятия.
             const isSaturdayElective =
                 currentDay === 'СУБОТА' &&
-                SATURDAY_ELECTIVES.some(elective =>
+                SATURDAY_ELECTIVES.some((elective) =>
                     normalizedSubject.includes(normalize(elective))
                 );
 
@@ -302,13 +305,20 @@ const parseHtmlSchedule = (doc: Document): Lesson[] => {
                 cell.start <= groupColumn &&
                 cell.end >= groupColumn;
 
-            // Субботние подгруппы могут находиться вне колонки Фб-26.
-            if (!belongsToGroup && !isSaturdayElective) {
+            // Выборочные подгруппы могут находиться вне колонки группы.
+            if (
+                !belongsToGroup &&
+                !isSaturdayElective &&
+                !isIkt1Elective
+            ) {
                 continue;
             }
 
-            // В субботу оставляем только три нужные подгруппы.
-            if (currentDay === 'СУБОТА' && /ЕП\s*-\s*ist/i.test(cell.text)) {
+            // Исключаем субботние подгруппы, которых нет в списке.
+            if (
+                currentDay === 'СУБОТА' &&
+                /ЕП\s*-\s*ist/i.test(cell.text)
+            ) {
                 if (isSaturdayElective) {
                     addLesson(
                         currentDay,
@@ -321,11 +331,20 @@ const parseHtmlSchedule = (doc: Document): Lesson[] => {
                 continue;
             }
 
-            // В остальные дни оставляем только ЕП-ikt12-1.
+            // Обрабатываем выборочные предметы.
             if (/ЕП\s*-\s*(ikt|ist)/i.test(cell.text)) {
+                const isLutsenkoLesson =
+                    /ЛУЦЕНКО/i.test(cell.text);
+
                 if (
                     currentDay !== 'СУБОТА' &&
-                    normalizedSubject.includes(normalize(TARGET_ELECTIVE))
+                    !isLutsenkoLesson &&
+                    (
+                        isIkt1Elective ||
+                        normalizedSubject.includes(
+                            normalize(TARGET_ELECTIVE)
+                        )
+                    )
                 ) {
                     addLesson(
                         currentDay,
