@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react';
 import {
     fetchAvailableWeeks,
@@ -64,24 +65,86 @@ function App() {
         return (localStorage.getItem('schedule_theme') as Theme) || 'light';
     });
 
-    // 1. Спочатку завантажуємо список доступних вкладок
+    // 1. Загружаем список недель и обновляем его каждые 5 минут
     useEffect(() => {
-        fetchAvailableWeeks().then((foundWeeks) => {
-            setWeeks(foundWeeks);
-            // За замовчуванням вибираємо найостанніший (найбільший) тиждень
-            const latest = foundWeeks[foundWeeks.length - 1] || null;
-            setSelectedWeek(latest);
-        });
+        let isActive = true;
+
+        const updateWeeks = async () => {
+            try {
+                const foundWeeks = await fetchAvailableWeeks();
+
+                if (!isActive) return;
+
+                setWeeks(foundWeeks);
+
+                setSelectedWeek((currentWeek) => {
+                    if (currentWeek) {
+                        const stillAvailable = foundWeeks.find(
+                            (week) => week.gid === currentWeek.gid
+                        );
+
+                        if (stillAvailable) {
+                            return stillAvailable;
+                        }
+                    }
+
+                    return foundWeeks[foundWeeks.length - 1] || null;
+                });
+            } catch (error) {
+                console.error('Помилка оновлення списку тижнів:', error);
+            }
+        };
+
+        void updateWeeks();
+
+        const intervalId = window.setInterval(() => {
+            void updateWeeks();
+        }, 5 * 60 * 1000);
+
+        return () => {
+            isActive = false;
+            window.clearInterval(intervalId);
+        };
     }, []);
 
-    // 2. Коли змінюється вибраний тиждень — завантажуємо його розклад
+    // 2. Загружаем расписание выбранной недели
+    // и обновляем его каждые 5 минут
     useEffect(() => {
-        if (!selectedWeek) return;
-        setIsLoading(true);
-        fetchAndParseSchedule(selectedWeek.gid).then((data) => {
-            setSchedule(data);
-            setIsLoading(false);
-        });
+        if (!selectedWeek) {
+            setSchedule([]);
+            return;
+        }
+
+        let isActive = true;
+
+        const updateSchedule = async () => {
+            setIsLoading(true);
+
+            try {
+                const data = await fetchAndParseSchedule(selectedWeek.gid);
+
+                if (isActive) {
+                    setSchedule(data);
+                }
+            } catch (error) {
+                console.error('Помилка оновлення розкладу:', error);
+            } finally {
+                if (isActive) {
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        void updateSchedule();
+
+        const intervalId = window.setInterval(() => {
+            void updateSchedule();
+        }, 5 * 60 * 1000);
+
+        return () => {
+            isActive = false;
+            window.clearInterval(intervalId);
+        };
     }, [selectedWeek]);
 
     const toggleLanguage = () => {
@@ -103,21 +166,24 @@ function App() {
         if (!acc[lesson.day]) {
             acc[lesson.day] = [];
         }
+
         acc[lesson.day].push(lesson);
         return acc;
     }, {} as Record<string, Lesson[]>);
 
-    // Беремо останні дві вкладки для швидкого перемикання (найновіша та попередня)
+    // Показываем две последние доступные недели
     const quickWeeks = weeks.slice(-2);
 
     return (
         <main
             className={`min-h-screen transition-colors duration-200 ${
-                isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-800'
+                isDark
+                    ? 'bg-slate-950 text-slate-100'
+                    : 'bg-slate-100 text-slate-800'
             }`}
         >
             <div className="mx-auto max-w-md px-4 py-6">
-                {/* Кнопки Налаштувань */}
+                {/* Кнопки настроек */}
                 <div className="flex items-center justify-between mb-4">
                     <button
                         onClick={toggleLanguage}
@@ -127,9 +193,13 @@ function App() {
                                 : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm'
                         }`}
                     >
-                        <span className={lang === 'ua' ? 'text-indigo-500 font-bold' : 'opacity-60'}>UA</span>
+                        <span className={lang === 'ua' ? 'text-indigo-500 font-bold' : 'opacity-60'}>
+                            UA
+                        </span>
                         <span className="opacity-40">/</span>
-                        <span className={lang === 'ru' ? 'text-indigo-500 font-bold' : 'opacity-60'}>RU</span>
+                        <span className={lang === 'ru' ? 'text-indigo-500 font-bold' : 'opacity-60'}>
+                            RU
+                        </span>
                     </button>
 
                     <button
@@ -156,51 +226,62 @@ function App() {
 
                 {/* Заголовок */}
                 <header className="mb-4 text-center">
-          <span
-              className={`inline-block rounded-full px-3 py-1 text-xs font-semibold tracking-wide ${
-                  isDark
-                      ? 'bg-indigo-950/80 text-indigo-300 border border-indigo-800/40'
-                      : 'bg-indigo-100 text-indigo-700'
-              }`}
-          >
-            {t.faculty}
-          </span>
-                    <h1 className={`mt-2 text-2xl font-extrabold ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                    <span
+                        className={`inline-block rounded-full px-3 py-1 text-xs font-semibold tracking-wide ${
+                            isDark
+                                ? 'bg-indigo-950/80 text-indigo-300 border border-indigo-800/40'
+                                : 'bg-indigo-100 text-indigo-700'
+                        }`}
+                    >
+                        {t.faculty}
+                    </span>
+
+                    <h1
+                        className={`mt-2 text-2xl font-extrabold ${
+                            isDark ? 'text-white' : 'text-slate-900'
+                        }`}
+                    >
                         {t.title}
                     </h1>
-                    <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+
+                    <p
+                        className={`mt-1 text-xs ${
+                            isDark ? 'text-slate-400' : 'text-slate-500'
+                        }`}
+                    >
                         {t.autoUpdate}
                     </p>
                 </header>
 
-                {/* Перемикач тижнів (найновіший та попередній) */}
+                {/* Переключатель недель */}
                 {quickWeeks.length > 0 && (
                     <div className="mb-6 flex items-center justify-center gap-2">
-                        {quickWeeks.map((w) => {
-                            const isActive = selectedWeek?.gid === w.gid;
+                        {quickWeeks.map((week) => {
+                            const isActive = selectedWeek?.gid === week.gid;
+
                             return (
                                 <button
-                                    key={w.gid}
-                                    onClick={() => setSelectedWeek(w)}
+                                    key={week.gid}
+                                    onClick={() => setSelectedWeek(week)}
                                     className={`flex-1 max-w-[170px] py-2 px-3 rounded-xl text-xs font-bold transition shadow-sm border ${
                                         isActive
                                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-indigo-500/20'
                                             : isDark
-                                                ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-850'
+                                                ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
                                                 : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                                     }`}
                                 >
-                                    {w.name}
+                                    {week.name}
                                 </button>
                             );
                         })}
                     </div>
                 )}
 
-                {/* Стан завантаження */}
+                {/* Состояние загрузки */}
                 {isLoading ? (
                     <div className="flex flex-col items-center justify-center pt-20 text-slate-400">
-                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent"></div>
+                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
                         <p className="mt-3 text-sm">{t.loading}</p>
                     </div>
                 ) : (
@@ -217,6 +298,7 @@ function App() {
                                     >
                                         {displayDay}
                                     </h2>
+
                                     <div className="space-y-3">
                                         {groupedSchedule[dayKey].map((lesson) => (
                                             <article
@@ -234,16 +316,17 @@ function App() {
                                                             : 'bg-indigo-50 text-indigo-600'
                                                     }`}
                                                 >
-                          <span className="text-base leading-none">
-                            {lesson.time.replace(/ пара/i, '')}
-                          </span>
+                                                    <span className="text-base leading-none">
+                                                        {lesson.time.replace(/ пара/i, '')}
+                                                    </span>
+
                                                     <span
                                                         className={`text-[10px] font-medium uppercase mt-1 ${
                                                             isDark ? 'text-indigo-400/80' : 'text-indigo-400'
                                                         }`}
                                                     >
-                            {t.lessonWord}
-                          </span>
+                                                        {t.lessonWord}
+                                                    </span>
                                                 </div>
 
                                                 <div className="flex-1">

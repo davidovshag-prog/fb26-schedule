@@ -1,7 +1,3 @@
-import Papa from 'papaparse';
-
-const BASE_CSV_URL =
-    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQefLGaOwFFyQ26xl8h3M1qPYLMLIZkFusiPt-bFlTEZHT4KSfdL0EFTM94NXyPXOfn5tMT-mUuKYZD/pub';
 
 export interface Lesson {
     id: string;
@@ -16,194 +12,369 @@ export interface SheetWeek {
     weekNumber: number;
 }
 
-const TARGET_GROUP = 'ФБ-26';
-const ALLOWED_ELECTIVES = ['ЕП-ist4', 'ЕП-ikt1-2'];
+const WORKER_URL =
+    'https://fb26-schedule-proxy.davidovshag.workers.dev';
 
-// Список доступных недель с точными gid
+const TARGET_GROUP = 'Фб-26';
+const TARGET_ELECTIVE = 'ЕП-ikt12-1';
+
+const SATURDAY_ELECTIVES = [
+    'ЕП-ist4-1',
+    'ЕП-ist4-2',
+    'ЕП-ist4-3',
+];
+
+
 export const fetchAvailableWeeks = async (): Promise<SheetWeek[]> => {
-    return [
-        {
-            name: '7 тиждень',
-            gid: '1083132043',
-            weekNumber: 7,
-        },
-        {
-            name: '8 тиждень',
-            gid: '769203663',
-            weekNumber: 8,
-        },
-    ];
-};
+    const response = await fetch(`${WORKER_URL}/?action=weeks`, {
+        cache: 'no-store',
+    });
 
-export const fetchAndParseSchedule = async (gid?: string): Promise<Lesson[]> => {
-    try {
-        const url = gid ? `${BASE_CSV_URL}?gid=${gid}&single=true&output=csv` : `${BASE_CSV_URL}?output=csv`;
-        const response = await fetch(url);
-        const csvText = await response.text();
-
-        return new Promise((resolve) => {
-            Papa.parse(csvText, {
-                header: false,
-                skipEmptyLines: false,
-                complete: (results) => {
-                    const rawData = results.data as string[][];
-                    const schedule = parseRawData(rawData);
-                    resolve(schedule);
-                },
-            });
-        });
-    } catch (error) {
-        console.error('Помилка завантаження розкладу:', error);
-        return [];
-    }
-};
-
-const cleanText = (str: string) =>
-    str.replace(/[\r\n\s]+/g, '').toUpperCase();
-
-const cleanForeignLanguage = (text: string): string => {
-    if (text.includes('Іноземна') && text.includes('Глущенко')) {
-        return 'Іноземна мова за професійним спрямуванням\nвикл. Глущенко А.В.\nпр.ауд. 719';
-    }
-    return text;
-};
-
-const parseRawData = (rawData: string[][]): Lesson[] => {
-    const schedule: Lesson[] = [];
-    let groupColIndex = -1;
-    let headerRowIndex = -1;
-
-    const targetClean = cleanText(TARGET_GROUP);
-
-    // 1. Пошук колонки групи ФБ-26
-    for (let i = 0; i < Math.min(30, rawData.length); i++) {
-        const row = rawData[i];
-        if (!row) continue;
-
-        const foundIndex = row.findIndex((cell) =>
-            cleanText(cell || '').includes(targetClean)
+    if (!response.ok) {
+        throw new Error(
+            `Не вдалося завантажити список тижнів: HTTP ${response.status}`
         );
-
-        if (foundIndex !== -1) {
-            groupColIndex = foundIndex;
-            headerRowIndex = i;
-            break;
-        }
     }
 
-    if (groupColIndex === -1) {
-        console.error(`Групу ${TARGET_GROUP} не знайдено!`);
-        return [];
+    const data: { weeks?: SheetWeek[] } = await response.json();
+
+    if (!Array.isArray(data.weeks)) {
+        throw new Error('Worker повернув некоректний список тижнів');
     }
 
-    const daysMap: Record<string, string> = {
-        'ПОНЕДІЛОК': 'ПОНЕДІЛОК',
-        'ВІВТОРОК': 'ВІВТОРОК',
-        'СЕРЕДА': 'СЕРЕДА',
-        'ЧЕТВЕР': 'ЧЕТВЕР',
+    return data.weeks
+        .filter(
+            (week) =>
+                typeof week.name === 'string' &&
+                /^\d+$/.test(week.gid) &&
+                Number.isInteger(week.weekNumber)
+        )
+        .sort((a, b) => a.weekNumber - b.weekNumber);
+};
+
+
+const cleanText = (value: string): string =>
+    (value || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[\r\n\s]+/g, ' ')
+        .trim();
+
+const normalize = (value: string): string =>
+    cleanText(value).toLocaleUpperCase('uk-UA');
+
+const normalizeDay = (value: string): string => {
+    const day = normalize(value).replace(/\s/g, '');
+
+    const days: Record<string, string> = {
+        ПОНЕДІЛОК: 'ПОНЕДІЛОК',
+        ВІВТОРОК: 'ВІВТОРОК',
+        СЕРЕДА: 'СЕРЕДА',
+        ЧЕТВЕР: 'ЧЕТВЕР',
         "П'ЯТНИЦЯ": "П'ЯТНИЦЯ",
-        'ПЯТНИЦЯ': "П'ЯТНИЦЯ",
-        'СУБОТА': 'СУБОТА',
+        ПЯТНИЦЯ: "П'ЯТНИЦЯ",
+        СУБОТА: 'СУБОТА',
     };
 
-    let currentDay = '';
-    let currentTime = '';
+    return days[day] || '';
+};
 
-    for (let i = headerRowIndex + 1; i < rawData.length; i++) {
-        const row = rawData[i];
-        if (!row || row.length === 0) continue;
+const normalizeTime = (value: string): string => {
+    const time = normalize(value)
+        .replace(/[ІI]/g, 'I')
+        .replace(/\s/g, '');
 
-        // Пошук дня тижня
-        for (let c = 0; c < Math.min(3, row.length); c++) {
-            const cellClean = cleanText(row[c] || '');
-            for (const dayKey of Object.keys(daysMap)) {
-                if (cellClean.includes(dayKey)) {
-                    currentDay = daysMap[dayKey];
-                    currentTime = '';
-                    break;
-                }
-            }
-        }
+    const numbers: Record<string, string> = {
+        I: 'I',
+        II: 'II',
+        III: 'III',
+        IV: 'IV',
+        V: 'V',
+        VI: 'VI',
+        VII: 'VII',
+        VIII: 'VIII',
+        '1': 'I',
+        '2': 'II',
+        '3': 'III',
+        '4': 'IV',
+        '5': 'V',
+        '6': 'VI',
+        '7': 'VII',
+        '8': 'VIII',
+    };
 
-        // Пошук номеру пари
-        for (let c = 0; c < Math.min(3, row.length); c++) {
-            const cellClean = cleanText(row[c] || '');
-            if (/^[IІVХX]+$/.test(cellClean)) {
-                const normalizedNumeral = cellClean.replace(/І/g, 'I');
-                currentTime = `${normalizedNumeral} пара`;
-                break;
-            } else if (/^[1-8]$/.test(cellClean)) {
-                currentTime = `${cellClean} пара`;
-                break;
-            }
-        }
+    return numbers[time] ? `${numbers[time]} пара` : '';
+};
 
-        let subject = (row[groupColIndex] || '').trim();
+const getPublishedTable = async (gid: string): Promise<Document> => {
+    const response = await fetch(
+        `${WORKER_URL}/?gid=${encodeURIComponent(gid)}`,
+        { cache: 'no-store' }
+    );
 
-        // Якщо в колонці групи порожньо:
-        if (!subject) {
-            // 1. Пошук вибіркових дисциплін
-            const electiveCell = row.find((cell) => {
-                if (!cell) return false;
-                const normalized = cell.toLowerCase().replace(/\s+/g, '');
-                return (
-                    normalized.includes('еп-ikt1-2') ||
-                    (normalized.includes('ikt1-2') && normalized.includes('сторожук')) ||
-                    normalized.includes('еп-ist4') ||
-                    (normalized.includes('ist4') && normalized.includes('івангород'))
-                );
-            });
-
-            if (electiveCell) {
-                subject = electiveCell.trim();
-            } else {
-                // 2. Пошук іноземної мови або спільних потокових пар
-                const streamCell = row
-                    .slice(2, groupColIndex + 2)
-                    .reverse()
-                    .find((c) => c && c.trim().length > 5);
-
-                if (
-                    streamCell &&
-                    !streamCell.includes('ЕП-') &&
-                    !streamCell.toLowerCase().includes('тобілевич') &&
-                    (streamCell.toLowerCase().includes('лек') ||
-                        streamCell.toLowerCase().includes('іноземна') ||
-                        streamCell.toLowerCase().includes('глущенко') ||
-                        streamCell.toLowerCase().includes('трубенко') ||
-                        streamCell.toLowerCase().includes('денисенко') ||
-                        streamCell.toLowerCase().includes('математ'))
-                ) {
-                    subject = cleanForeignLanguage(streamCell.trim());
-                }
-            }
-        } else {
-            // Якщо в колонці групи щось є, але це чужа вибіркова дисципліна — фільтруємо
-            if (subject.includes('ЕП-')) {
-                const normalized = subject.toLowerCase().replace(/\s+/g, '');
-                const isMatch =
-                    normalized.includes('еп-ikt1-2') ||
-                    normalized.includes('еп-ist4') ||
-                    normalized.includes('сторожук') ||
-                    normalized.includes('івангород');
-
-                if (!isMatch) continue;
-            } else if (subject.toLowerCase().includes('іноземна')) {
-                subject = cleanForeignLanguage(subject);
-            }
-        }
-
-        if (!subject) continue;
-
-        if (currentDay) {
-            schedule.push({
-                id: `${currentDay}-${currentTime || 'пара'}-${i}`,
-                day: currentDay,
-                time: currentTime || 'Пара',
-                subject: subject,
-            });
-        }
+    if (!response.ok) {
+        throw new Error(
+            `Не вдалося завантажити розклад: HTTP ${response.status}`
+        );
     }
 
-    return schedule;
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    if (!doc.querySelector('tr')) {
+        throw new Error('Worker не повернув HTML-таблицю');
+    }
+
+    return doc;
+};
+
+interface GridCell {
+    text: string;
+    start: number;
+    end: number;
+}
+
+const buildGrid = (
+    rows: HTMLTableRowElement[]
+): (GridCell | undefined)[][] => {
+    const grid: (GridCell | undefined)[][] = [];
+
+    rows.forEach((row, rowIndex) => {
+        grid[rowIndex] ??= [];
+
+        let column = 0;
+
+        Array.from(row.cells).forEach(cell => {
+            while (grid[rowIndex][column]) {
+                column++;
+            }
+
+            const colspan = cell.colSpan || 1;
+            const rowspan = cell.rowSpan || 1;
+
+            const text = cleanText(
+                cell.innerText || cell.textContent || ''
+            );
+
+            const gridCell: GridCell = {
+                text,
+                start: column,
+                end: column + colspan - 1,
+            };
+
+            for (
+                let r = rowIndex;
+                r < Math.min(rows.length, rowIndex + rowspan);
+                r++
+            ) {
+                grid[r] ??= [];
+
+                for (let c = column; c < column + colspan; c++) {
+                    grid[r][c] = gridCell;
+                }
+            }
+
+            column += colspan;
+        });
+    });
+
+    return grid;
+};
+
+const parseHtmlSchedule = (doc: Document): Lesson[] => {
+    const rows = Array.from(
+        doc.querySelectorAll('tr')
+    ) as HTMLTableRowElement[];
+
+    if (!rows.length) {
+        throw new Error('У HTML не знайдено рядків таблиці');
+    }
+
+    const grid = buildGrid(rows);
+
+    const headerRow = grid.find(row =>
+        row?.some(cell => cell?.text === TARGET_GROUP)
+    );
+
+    const groupColumn = headerRow?.findIndex(
+        cell => cell?.text === TARGET_GROUP
+    ) ?? -1;
+
+    if (groupColumn === -1) {
+        throw new Error(`Не знайдено колонку ${TARGET_GROUP}`);
+    }
+
+    const lessons: Lesson[] = [];
+    const added = new Set<string>();
+
+    let currentDay = '';
+
+    const dayOrder = [
+        'ПОНЕДІЛОК',
+        'ВІВТОРОК',
+        'СЕРЕДА',
+        'ЧЕТВЕР',
+        "П'ЯТНИЦЯ",
+        'СУБОТА',
+    ];
+
+    const timeOrder = [
+        'I пара',
+        'II пара',
+        'III пара',
+        'IV пара',
+        'V пара',
+        'VI пара',
+        'VII пара',
+        'VIII пара',
+    ];
+
+    const addLesson = (
+        day: string,
+        time: string,
+        subject: string,
+        rowIndex: number
+    ) => {
+        const cleanSubject = cleanText(subject);
+
+        if (!day || !time || !cleanSubject) return;
+
+        const key = [
+            day,
+            time,
+            normalize(cleanSubject),
+        ].join('|');
+
+        if (added.has(key)) return;
+
+        added.add(key);
+
+        lessons.push({
+            id: `${day}-${time}-${rowIndex}-${lessons.length}`,
+            day,
+            time,
+            subject: cleanSubject,
+        });
+    };
+
+    rows.forEach((_row, rowIndex) => {
+        const cells = grid[rowIndex] || [];
+
+        const day = cells
+            .map(cell => cell?.text || '')
+            .map(normalizeDay)
+            .find(Boolean);
+
+        if (day) {
+            currentDay = day;
+        }
+
+        if (!currentDay) return;
+
+        const time = cells
+            .map(cell => cell?.text || '')
+            .map(normalizeTime)
+            .find(Boolean);
+
+        if (!time) return;
+
+        const seenCells = new Set<GridCell>();
+
+        for (const cell of cells) {
+            if (!cell || seenCells.has(cell)) continue;
+
+            seenCells.add(cell);
+
+            if (!cell.text) continue;
+
+            if (normalizeDay(cell.text) || normalizeTime(cell.text)) {
+                continue;
+            }
+
+            const normalizedSubject = normalize(cell.text);
+
+            const isSaturdayElective =
+                currentDay === 'СУБОТА' &&
+                SATURDAY_ELECTIVES.some(elective =>
+                    normalizedSubject.includes(normalize(elective))
+                );
+
+            const belongsToGroup =
+                cell.start <= groupColumn &&
+                cell.end >= groupColumn;
+
+            // Субботние подгруппы могут находиться вне колонки Фб-26.
+            if (!belongsToGroup && !isSaturdayElective) {
+                continue;
+            }
+
+            // В субботу оставляем только три нужные подгруппы.
+            if (currentDay === 'СУБОТА' && /ЕП\s*-\s*ist/i.test(cell.text)) {
+                if (isSaturdayElective) {
+                    addLesson(
+                        currentDay,
+                        time,
+                        cell.text,
+                        rowIndex
+                    );
+                }
+
+                continue;
+            }
+
+            // В остальные дни оставляем только ЕП-ikt12-1.
+            if (/ЕП\s*-\s*(ikt|ist)/i.test(cell.text)) {
+                if (
+                    currentDay !== 'СУБОТА' &&
+                    normalizedSubject.includes(normalize(TARGET_ELECTIVE))
+                ) {
+                    addLesson(
+                        currentDay,
+                        time,
+                        cell.text,
+                        rowIndex
+                    );
+                }
+
+                continue;
+            }
+
+            addLesson(
+                currentDay,
+                time,
+                cell.text,
+                rowIndex
+            );
+        }
+    });
+
+    return lessons.sort((a, b) => {
+        const dayDifference =
+            dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
+
+        if (dayDifference !== 0) {
+            return dayDifference;
+        }
+
+        return timeOrder.indexOf(a.time) - timeOrder.indexOf(b.time);
+    });
+};
+
+export const fetchAndParseSchedule = async (
+    gid?: string
+): Promise<Lesson[]> => {
+    try {
+        const selectedGid = gid || '769203663';
+
+        const doc = await getPublishedTable(selectedGid);
+        const lessons = parseHtmlSchedule(doc);
+
+        console.log('Завантажено занять:', lessons.length);
+        console.table(lessons);
+
+        return lessons;
+    } catch (error) {
+        console.error('Помилка завантаження розкладу:', error);
+
+        return [];
+    }
 };
